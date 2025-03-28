@@ -29,17 +29,22 @@ def get_db_connection():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS council_meetings (
-    timestamp TEXT,
-    url TEXT PRIMARY KEY
+    timestamp TEXT NOT NULL,
+    meeting_name TEXT NOT NULL,
+    url TEXT PRIMARY KEY NOT NULL,
+    x_url TEXT NOT NULL,
+    summary TEXT NOT NULL
     )
     ''')
     conn.commit()
     return conn, cursor
 
 
+conn, cursor = get_db_connection()
+
+
 def scrape_links():
     """Scrape agenda PDFs from council website."""
-    conn, cursor = get_db_connection()
     try:
         print("Scraping links from council website...")
         response = requests.get(COUNCIL_URL)
@@ -54,26 +59,39 @@ def scrape_links():
             # This is because the PDFs of the meeting minutes are delayed by 4 months, and the agenda PDFs contain the
             # decisions that the council has made regardless
 
-            if link['href'].endswith('.pdf') and 'AGN' in link['href']:
+            if link['href'].endswith('.PDF') and 'AGN' in link['href']:
                 found_link = urljoin(COUNCIL_URL, link['href'])
+                print("Found link:", found_link)
+
                 cursor.execute("SELECT url FROM council_meetings WHERE url = ?", (found_link,))
                 existing_url = cursor.fetchone()
                 if existing_url:
                     print(f"File from {link} has already been downloaded. Skipping.")
 
                 else:
-                    new_links.append(found_link)
-                    cursor.execute(f"INSERT INTO council_meetings VALUES (DATETIME('now'),?)", found_link)
-                    conn.commit()
-                    print(f"Added {found_link} to database.")
+                    print(f"Downloading {found_link}")
+                    meeting_name = find_meeting_name_from_link(link)
+                    print(f"Added {found_link} to list of found links.")
+                    new_links.append((meeting_name, found_link))
 
-        conn.close()
         return new_links
 
     except requests.RequestException as e:
         print(f"Error scraping council website: {e}")
-        conn.close()
+
         return []
+
+
+def find_meeting_name_from_link(link):
+    parent = link.parent
+    previous_sibling = parent.previous_sibling()
+    if previous_sibling:
+        # Extract the text from the previous sibling
+        meeting_name = previous_sibling.text.strip()
+        print(f"Meeting Name found: {meeting_name}")
+    else:
+        meeting_name = []
+    return meeting_name
 
 
 def summarize_with_gemini(link):
@@ -108,12 +126,23 @@ def post_to_twitter(summary):
         client = tweepy.Client(X_API_BEARER_TOKEN)
         tweets = [summary[i:i + 280] for i in range(0, len(summary), 280)]
         prev_tweet_id = None
+        first_tweet_id = None  # storing the first tweet ID.
 
         for tweet in tweets:
             response = client.create_tweet(text=tweet, in_reply_to_tweet_id=prev_tweet_id)
             prev_tweet_id = response.data['id']
-
+            if first_tweet_id is None:
+                first_tweet_id = response.data['id']
         print("Tweets posted successfully.")
+
+        if first_tweet_id:
+            user = client.get_me()
+            username = user.data.username
+            first_tweet_url = f"https://x.com/{username}/status/{first_tweet_id}"
+            return first_tweet_url
+        else:
+            return None
+
     except Exception as e:
         print(f"Error posting to Twitter: {e}")
 
@@ -121,9 +150,17 @@ def post_to_twitter(summary):
 def main():
     """Main function to execute the workflow."""
     found_links = scrape_links()
-    for link in found_links:
+    data_to_insert = []
+    for meeting_name, link in found_links:
         summary = summarize_with_gemini(link)
-        post_to_twitter(summary)
+        x_link = post_to_twitter(summary)
+        data_to_insert.append((meeting_name, link, x_link, summary))
+
+    if data_to_insert:
+        cursor.executemany("INSERT INTO council_meetings VALUES (DATETIME('now'), ?, ?, ?)", data_to_insert)
+        conn.commit()
+
+    conn.close()
 
 
 if __name__ == "__main__":
