@@ -94,7 +94,7 @@ def find_meeting_name_from_link(link):
     return meeting_name
 
 
-def summarize_with_gemini(link):
+def summarize_with_gemini(meeting_name, link):
     """Generate a summary using Google's Gemini API."""
     try:
         print("Summarizing with gemini...")
@@ -106,10 +106,16 @@ def summarize_with_gemini(link):
             config={"mime_type": "application/pdf"}
         )
 
-        prompt = """
-        Summarize this city council meeting agenda into key bullet points for a Twitter thread:
+        prompt = f"""
+        Summarize this city council meeting in short paragraphs.
         - Focus on key decisions, discussions, votes, and public comments.
-        - Keep each point under 280 characters.
+        - Only include things that are vitally important and are interesting to an audience. 
+        - Do not include boring information such as members present and public comment.
+        - Focus on delivering information that is significant to the city.
+        - Include specifics and details
+
+        Begin your response with "The {meeting_name} met to discuss:"
+
         """
 
         response = client.models.generate_content(model="gemini-2.0-flash", contents=[sample_doc, prompt])
@@ -153,7 +159,7 @@ def main():
         found_links = scrape_links()
         data_to_insert = []
         for meeting_name, link in found_links:
-            summary = summarize_with_gemini(link)
+            summary = summarize_with_gemini(meeting_name, link)
             x_link = post_to_twitter(summary)
             data_to_insert.append((meeting_name, link, x_link, summary))
 
