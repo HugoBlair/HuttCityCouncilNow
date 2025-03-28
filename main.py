@@ -162,7 +162,7 @@ def main():
             conn.commit()
         conn.close()
     except KeyboardInterrupt:
-        print("Program closed by user")
+        print("Program has been closed by the user")
 
 
 if __name__ == "__main__":
