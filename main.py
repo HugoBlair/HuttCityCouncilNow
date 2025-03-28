@@ -59,7 +59,7 @@ def scrape_links():
             # This is because the PDFs of the meeting minutes are delayed by 4 months, and the agenda PDFs contain the
             # decisions that the council has made regardless
 
-            if link['href'].endswith('.PDF') and 'AGN' in link['href']:
+            if link['href'].endswith('.PDF') and 'AGN' in link['href'] and 'SUP' not in link['href']:
                 found_link = urljoin(COUNCIL_URL, link['href'])
                 print("Found link:", found_link)
 
@@ -84,7 +84,7 @@ def scrape_links():
 
 def find_meeting_name_from_link(link):
     parent = link.parent
-    previous_sibling = parent.previous_sibling()
+    previous_sibling = parent.find_previous_sibling('td', class_='bpsGridCommittee')
     if previous_sibling:
         # Extract the text from the previous sibling
         meeting_name = previous_sibling.text.strip()
@@ -149,18 +149,20 @@ def post_to_twitter(summary):
 
 def main():
     """Main function to execute the workflow."""
-    found_links = scrape_links()
-    data_to_insert = []
-    for meeting_name, link in found_links:
-        summary = summarize_with_gemini(link)
-        x_link = post_to_twitter(summary)
-        data_to_insert.append((meeting_name, link, x_link, summary))
+    try:
+        found_links = scrape_links()
+        data_to_insert = []
+        for meeting_name, link in found_links:
+            summary = summarize_with_gemini(link)
+            x_link = post_to_twitter(summary)
+            data_to_insert.append((meeting_name, link, x_link, summary))
 
-    if data_to_insert:
-        cursor.executemany("INSERT INTO council_meetings VALUES (DATETIME('now'), ?, ?, ?)", data_to_insert)
-        conn.commit()
-
-    conn.close()
+        if data_to_insert:
+            cursor.executemany("INSERT INTO council_meetings VALUES (DATETIME('now'),?, ?, ?, ?)", data_to_insert)
+            conn.commit()
+        conn.close()
+    except KeyboardInterrupt:
+        print("Program closed by user")
 
 
 if __name__ == "__main__":
