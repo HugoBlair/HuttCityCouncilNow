@@ -131,9 +131,10 @@ def summarize_with_gemini(committee_name, link):
         - Only include things that are vitally important and are interesting to an audience. 
         - Do not include boring information such as members present and public comment.
         - Focus on delivering information that is significant to the city.
-        - Include specifics and details
+        - Include important specifics and details
 
         Begin your response with "The {committee_name} met to discuss:"
+        Every time you want a new line, you must type "/n" instead.
 
         """
 
@@ -189,7 +190,7 @@ def post_to_twitter(summary):
         first_tweet_id = None  # storing the first tweet ID.
 
         for tweet in tweets:
-            response = client.create_tweet(text=tweet, in_reply_to_tweet_id=prev_tweet_id)
+            response = client.create_tweet(text=tweet.replace("\\n", "\n"), in_reply_to_tweet_id=prev_tweet_id)
             prev_tweet_id = response.data['id']
             if first_tweet_id is None:
                 first_tweet_id = response.data['id']
