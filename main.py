@@ -1,7 +1,9 @@
 import io
+import math
 import os
 import re
 import sqlite3
+import textwrap
 from urllib.parse import urljoin
 
 import httpx
@@ -14,7 +16,12 @@ from google import genai
 # Load API keys from environment variables
 load_dotenv()
 
+X_API_CONSUMER_KEY = os.getenv("X_API_CONSUMER_KEY")
+X_API_CONSUMER_KEY_SECRET = os.getenv("X_API_CONSUMER_KEY_SECRET")
+X_API_ACCESS_TOKEN = os.getenv("X_API_ACCESS_TOKEN")
+X_API_ACCESS_TOKEN_SECRET = os.getenv("X_API_ACCESS_TOKEN_SECRET")
 X_API_BEARER_TOKEN = os.getenv("X_API_BEARER_TOKEN")
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Council URL where table of PDFs is stored
@@ -30,7 +37,7 @@ def get_db_connection():
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS council_meetings (
     timestamp TEXT NOT NULL,
-    meeting_name TEXT NOT NULL,
+    committee_name TEXT NOT NULL,
     url TEXT PRIMARY KEY NOT NULL,
     x_url TEXT NOT NULL,
     summary TEXT NOT NULL
@@ -51,7 +58,7 @@ def scrape_links():
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        found_links = soup.find_all("a", href=re.compile(r"\.PDF$"))
+        found_links = soup.find_all("a", href=re.compile(r"\.PDF$"), limit=1)
         new_links = []
 
         for link in found_links:
@@ -70,9 +77,11 @@ def scrape_links():
 
                 else:
                     print(f"Downloading {found_link}")
-                    meeting_name = find_meeting_name_from_link(link)
+                    committee_name = find_committee_name_from_link(link)
                     print(f"Added {found_link} to list of found links.")
-                    new_links.append((meeting_name, found_link))
+                    new_links.append((committee_name, found_link))
+                    with open("downloaded.pdf", "wb") as f:
+                        f.write(httpx.get(found_link).content)
 
         return new_links
 
@@ -82,28 +91,38 @@ def scrape_links():
         return []
 
 
-def find_meeting_name_from_link(link):
+def find_committee_name_from_link(link):
     parent = link.parent
-    previous_sibling = parent.find_previous_sibling('td', class_='bpsGridCommittee')
-    if previous_sibling:
+    committee_td = parent.find_previous_sibling('td', class_='bpsGridCommittee')
+    br_tag = committee_td.find('br')
+    if committee_td and br_tag:
         # Extract the text from the previous sibling
-        meeting_name = previous_sibling.text.strip()
-        print(f"Meeting Name found: {meeting_name}")
+        committee_name = br_tag.previous_sibling.strip()
+        print(f"Meeting Name found: {committee_name}")
+    elif committee_td:
+        committee_name = committee_td.text.strip()
+        print(f"Meeting Name found: {committee_name}")
     else:
-        meeting_name = []
-    return meeting_name
+        committee_name = "Unknown Committee"
+        print("Meeting name not found")
+
+    return committee_name
 
 
-def summarize_with_gemini(meeting_name, link):
+def summarize_with_gemini(committee_name, link):
     """Generate a summary using Google's Gemini API."""
     try:
         print("Summarizing with gemini...")
         client = genai.Client(api_key=GEMINI_API_KEY)
-        doc_io = io.BytesIO(httpx.get(link).content)
+        doc_io = io.BytesIO(httpx.get(link, follow_redirects=True, timeout=30).content)
+
+        if doc_io.getbuffer().nbytes < 100:  # Arbitrary small size check
+            print(f"Warning: File size is very small ({doc_io.getbuffer().nbytes} bytes). May not be a valid PDF.")
 
         sample_doc = client.files.upload(
             file=doc_io,
-            config={"mime_type": "application/pdf"}
+            config=dict(
+                mime_type='application/pdf')
         )
 
         prompt = f"""
@@ -114,23 +133,58 @@ def summarize_with_gemini(meeting_name, link):
         - Focus on delivering information that is significant to the city.
         - Include specifics and details
 
-        Begin your response with "The {meeting_name} met to discuss:"
+        Begin your response with "The {committee_name} met to discuss:"
 
         """
 
         response = client.models.generate_content(model="gemini-2.0-flash", contents=[sample_doc, prompt])
-        return response.text if response else "Error generating summary."
+        if response:
+            print("Successfully generated summary")
+            return response.text
+        else:
+            print("Error generating summary.")
 
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP Error downloading PDF from {link}: {e.response.status_code} - {e.response.text}")
+        return f"Error generating summary: Failed to download PDF ({e.response.status_code})."
+    except httpx.RequestError as e:
+        print(f"Request Error downloading PDF from {link}: {e}")
+        return "Error generating summary: Network error during download."
     except Exception as e:
+        # Catch the specific Gemini API error if possible, otherwise generic
         print(f"Error summarizing with Gemini: {e}")
+        # Check if the error string contains the specific message
         return "Error generating summary."
 
 
 def post_to_twitter(summary):
     """Post summary to Twitter as a thread."""
     try:
-        client = tweepy.Client(X_API_BEARER_TOKEN)
-        tweets = [summary[i:i + 280] for i in range(0, len(summary), 280)]
+        client = tweepy.Client(
+            X_API_BEARER_TOKEN,
+            X_API_CONSUMER_KEY,
+            X_API_CONSUMER_KEY_SECRET,
+            X_API_ACCESS_TOKEN,
+            X_API_ACCESS_TOKEN_SECRET
+        )
+        tweet_length = len(summary)
+        tweets = []
+
+        if tweet_length > 272:
+            tweet_length_limit = tweet_length / 272
+
+            tweet_chunk_length = tweet_length / math.ceil(tweet_length_limit)
+
+            # chunk the tweet into individual pieces
+            tweet_chunks = textwrap.wrap(summary, math.ceil(tweet_chunk_length), break_long_words=False)
+
+            # iterate over the chunks
+            for x, chunk in zip(range(len(tweet_chunks)), tweet_chunks):
+                if x == 0:
+                    tweets.append(f' {chunk} (1/{len(tweet_chunks)})')
+                else:
+                    tweets.append(f'{chunk} ({x + 1}/{len(tweet_chunks)})')
+
         prev_tweet_id = None
         first_tweet_id = None  # storing the first tweet ID.
 
@@ -158,10 +212,10 @@ def main():
     try:
         found_links = scrape_links()
         data_to_insert = []
-        for meeting_name, link in found_links:
-            summary = summarize_with_gemini(meeting_name, link)
+        for committee_name, link in found_links:
+            summary = summarize_with_gemini(committee_name, link)
             x_link = post_to_twitter(summary)
-            data_to_insert.append((meeting_name, link, x_link, summary))
+            data_to_insert.append((committee_name, link, x_link, summary))
 
         if data_to_insert:
             cursor.executemany("INSERT INTO council_meetings VALUES (DATETIME('now'),?, ?, ?, ?)", data_to_insert)
