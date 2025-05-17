@@ -133,8 +133,13 @@ def summarize_with_gemini(committee_name, link):
         - Focus on delivering information that is significant to the city.
         - Include important specifics and details
 
-        Begin your response with "The {committee_name} met to discuss:"
-        Every time you want a new line, you must type "/n" instead.
+        Begin your response with "The {committee_name} met to discuss:" followed by the main subject of the meeting.
+        Add a small amount of hashtags into the tweet but only if relevant.
+                
+        Use natural formatting like this:
+        • Topic A "\n"
+        • Topic B "\n"
+        • Topic C "\n"
 
         """
 
@@ -190,7 +195,8 @@ def post_to_twitter(summary):
         first_tweet_id = None  # storing the first tweet ID.
 
         for tweet in tweets:
-            response = client.create_tweet(text=tweet.replace("\\n", "\n"), in_reply_to_tweet_id=prev_tweet_id)
+            # response = client.create_tweet(text=tweet.replace("\\n", "\n"), in_reply_to_tweet_id=prev_tweet_id)
+            response = client.create_tweet(text=tweet, in_reply_to_tweet_id=prev_tweet_id)
             prev_tweet_id = response.data['id']
             if first_tweet_id is None:
                 first_tweet_id = response.data['id']
