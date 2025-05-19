@@ -4,6 +4,10 @@
 
 This is the code that powers the @HuttCouncilNow X (Twitter) account. The bot automatically finds, downloads, summarizes, and tweets about Hutt City Council meeting agendas and decisions.
 
+**Here is the link to my account:**
+
+https://x.com/HuttCouncilNow
+
 ## What does it do?
 
 - Scrapes the Hutt City Council website for new meeting agenda PDFs
