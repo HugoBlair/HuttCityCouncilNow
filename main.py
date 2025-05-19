@@ -22,7 +22,7 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 
 # Create file handler and set level
-file_handler = logging.FileHandler('council_scraper.log', "w", "utf-8")
+file_handler = logging.FileHandler('council_scraper.log', "a", "utf-8")
 file_handler.setLevel(logging.INFO)
 
 # Create formatter
