@@ -257,10 +257,8 @@ def main():
         found_links = scrape_links()
         data_to_insert = []
         for committee_name, link in found_links:
-            # summary = summarize_with_gemini(committee_name, link)
-            # x_link = post_to_twitter(summary)
-            summary = "null"
-            x_link = "null"
+            summary = summarize_with_gemini(committee_name, link)
+            x_link = post_to_twitter(summary)
             if committee_name and link and x_link and summary:
                 data_to_insert.append((committee_name, link, x_link, summary))
 
