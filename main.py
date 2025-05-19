@@ -22,7 +22,7 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 
 # Create file handler and set level
-file_handler = logging.FileHandler('council_scraper.log')
+file_handler = logging.FileHandler('council_scraper.log', "w", "utf-8")
 file_handler.setLevel(logging.INFO)
 
 # Create formatter
@@ -82,7 +82,7 @@ def scrape_links():
         soup = BeautifulSoup(response.text, "html.parser")
 
         # Change limit to adjust how far the program should look back through the agenda files
-        found_links = soup.find_all("a", href=re.compile(r"\.PDF$"), limit=1)
+        found_links = soup.find_all("a", href=re.compile(r"\.PDF$"), limit=6)
         new_links = []
 
         for link in found_links:
@@ -122,10 +122,10 @@ def find_committee_name_from_link(link):
     if committee_td and br_tag:
         # Extract the text from the previous sibling
         committee_name = br_tag.previous_sibling.strip()
-        logger.info("Meeting Name found: %s", committee_name)
+        logger.info(f"Meeting Name found: {committee_name}")
     elif committee_td:
         committee_name = committee_td.text.strip()
-        logger.info("Meeting Name found: %s", committee_name)
+        logger.info(f"Meeting Name found: {committee_name}")
     else:
         committee_name = "Unknown Committee"
         logger.info("Meeting name not found")
@@ -142,8 +142,8 @@ def summarize_with_gemini(committee_name, link):
         logger.debug(doc_io.getvalue())
 
         if doc_io.getbuffer().nbytes < 100:  # Arbitrary small size check
-            logger.warning("Warning: File size is very small (%s bytes). May not be a valid PDF.",
-                           doc_io.getbuffer().nbytes)
+            logger.warning(f"Warning: File size is very small {doc_io.getbuffer().nbytes} bytes). May not be a valid "
+                           f"PDF.")
 
         sample_doc = client.files.upload(
             file=doc_io,
@@ -193,13 +193,12 @@ def summarize_with_gemini(committee_name, link):
             logger.error("Error generating summary.")
 
     except httpx.HTTPStatusError as e:
-        logger.error("HTTP Error downloading PDF from %s: %s - %s", link, e.response.status_code, e.response.text)
+        logger.error(f"HTTP Error downloading PDF from {link}: {e.response.status_code} - {e.response.text}")
     except httpx.RequestError as e:
-        logger.error("Request Error downloading PDF from %s: %s", link, traceback.format_exc())
+        logger.error(f"Request Error downloading PDF from {link}: {traceback.format_exc()}")
     except Exception as e:
         # Catch the specific Gemini API error if possible, otherwise generic
-        logger.error("Error summarizing with Gemini: %s", e)
-        # Check if the error string contains the specific message
+        logger.error(f"Error summarizing with Gemini: {e}")
 
 
 def post_to_twitter(summary):
@@ -258,14 +257,16 @@ def main():
         found_links = scrape_links()
         data_to_insert = []
         for committee_name, link in found_links:
-            summary = summarize_with_gemini(committee_name, link)
-            x_link = None
+            # summary = summarize_with_gemini(committee_name, link)
             # x_link = post_to_twitter(summary)
+            summary = "null"
+            x_link = "null"
             if committee_name and link and x_link and summary:
                 data_to_insert.append((committee_name, link, x_link, summary))
 
         if data_to_insert:
             cursor.executemany("INSERT INTO council_meetings VALUES (DATETIME('now'),?, ?, ?, ?)", data_to_insert)
+            logger.info("Successfully inserted data")
             conn.commit()
         conn.close()
     except KeyboardInterrupt:
