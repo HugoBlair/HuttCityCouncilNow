@@ -13,6 +13,10 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from google import genai
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE_PATH = os.path.join(BASE_DIR, 'council_scraper.log')
+DB_PATH = os.path.join(BASE_DIR, 'council_meetings.db')
+
 # Set up logging
 logger = logging.getLogger('council_scraper')
 logger.setLevel(logging.INFO)
@@ -22,7 +26,7 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 
 # Create file handler and set level
-file_handler = logging.FileHandler('council_scraper.log', "a", "utf-8")
+file_handler = logging.FileHandler(LOG_FILE_PATH, "a", "utf-8")
 file_handler.setLevel(logging.INFO)
 
 # Create formatter
@@ -48,13 +52,10 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Council URL where table of PDFs is stored
 COUNCIL_URL = "https://huttcity.infocouncil.biz/"
 
-# SQLlite DB
-DB_NAME = 'council_meetings.db'
-
 
 def get_db_connection():
     """Connect to SQLite database."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS council_meetings (
     timestamp TEXT NOT NULL,
