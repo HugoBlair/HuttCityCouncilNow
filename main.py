@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import re
 import sqlite3
@@ -11,6 +12,27 @@ import tweepy
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from google import genai
+
+# Set up logging
+logger = logging.getLogger('council_scraper')
+logger.setLevel(logging.INFO)
+
+# Create console handler and set level
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+
+# Create file handler and set level
+file_handler = logging.FileHandler('council_scraper.log')
+file_handler.setLevel(logging.INFO)
+
+# Create formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+file_handler.setFormatter(formatter)
+
+# Add handlers to logger
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
 
 # Load API keys from environment variables
 load_dotenv()
@@ -54,7 +76,7 @@ def scrape_links():
 
     try:
 
-        print("Scraping links from council website...")
+        logger.info("Scraping links from council website...")
         response = requests.get(COUNCIL_URL)
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -70,17 +92,17 @@ def scrape_links():
 
             if link['href'].endswith('.PDF') and 'AGN' in link['href'] and 'SUP' not in link['href']:
                 found_link = urljoin(COUNCIL_URL, link['href'])
-                print("Found link:", found_link)
+                logger.info("Found link: %s", found_link)
 
                 cursor.execute("SELECT url FROM council_meetings WHERE url = ?", (found_link,))
                 existing_url = cursor.fetchone()
                 if existing_url:
-                    print(f"File from {link} has already been downloaded. Skipping.")
+                    logger.info("File from %s has already been downloaded. Skipping.", link)
 
                 else:
-                    print(f"Downloading {found_link}")
+                    logger.info("Downloading %s", found_link)
                     committee_name = find_committee_name_from_link(link)
-                    print(f"Added {found_link} to list of found links.")
+                    logger.info("Added %s to list of found links.", found_link)
                     new_links.append((committee_name, found_link))
                     with open("downloaded.pdf", "wb") as f:
                         f.write(httpx.get(found_link).content)
@@ -88,7 +110,7 @@ def scrape_links():
         return new_links
 
     except requests.RequestException as e:
-        print(f"Error scraping council website: {e}")
+        logger.error("Error scraping council website: %s", e)
 
         return []
 
@@ -100,13 +122,13 @@ def find_committee_name_from_link(link):
     if committee_td and br_tag:
         # Extract the text from the previous sibling
         committee_name = br_tag.previous_sibling.strip()
-        print(f"Meeting Name found: {committee_name}")
+        logger.info("Meeting Name found: %s", committee_name)
     elif committee_td:
         committee_name = committee_td.text.strip()
-        print(f"Meeting Name found: {committee_name}")
+        logger.info("Meeting Name found: %s", committee_name)
     else:
         committee_name = "Unknown Committee"
-        print("Meeting name not found")
+        logger.info("Meeting name not found")
 
     return committee_name
 
@@ -114,13 +136,14 @@ def find_committee_name_from_link(link):
 def summarize_with_gemini(committee_name, link):
     """Generate a summary using Google's Gemini API."""
     try:
-        print("Summarizing with gemini...")
+        logger.info("Summarizing with gemini...")
         client = genai.Client(api_key=GEMINI_API_KEY)
         doc_io = io.BytesIO(httpx.get(link, follow_redirects=True, timeout=120).content)
-        print(doc_io.getvalue())
+        logger.debug(doc_io.getvalue())
 
         if doc_io.getbuffer().nbytes < 100:  # Arbitrary small size check
-            print(f"Warning: File size is very small ({doc_io.getbuffer().nbytes} bytes). May not be a valid PDF.")
+            logger.warning("Warning: File size is very small (%s bytes). May not be a valid PDF.",
+                           doc_io.getbuffer().nbytes)
 
         sample_doc = client.files.upload(
             file=doc_io,
@@ -153,25 +176,29 @@ def summarize_with_gemini(committee_name, link):
 
         response = client.models.generate_content(model="gemini-2.0-flash", contents=[sample_doc, prompt])
         if response:
-            print("Successfully generated summary")
+            logger.info("Successfully generated summary")
 
+            """
+            Print out tweets (for testing)
+            
             tweets = []
             for tweet in yield_tweet(response.text.splitlines()):
                 tweets.append(tweet)
 
-            print(tweets)
+            logger.debug(tweets)
+            """
 
             return response.text
         else:
-            print("Error generating summary.")
+            logger.error("Error generating summary.")
 
     except httpx.HTTPStatusError as e:
-        print(f"HTTP Error downloading PDF from {link}: {e.response.status_code} - {e.response.text}")
+        logger.error("HTTP Error downloading PDF from %s: %s - %s", link, e.response.status_code, e.response.text)
     except httpx.RequestError as e:
-        print(f"Request Error downloading PDF from {link}: {traceback.format_exc()}")
+        logger.error("Request Error downloading PDF from %s: %s", link, traceback.format_exc())
     except Exception as e:
         # Catch the specific Gemini API error if possible, otherwise generic
-        print(f"Error summarizing with Gemini: {e}")
+        logger.error("Error summarizing with Gemini: %s", e)
         # Check if the error string contains the specific message
 
 
@@ -198,7 +225,7 @@ def post_to_twitter(summary):
             prev_tweet_id = response.data['id']
             if first_tweet_id is None:
                 first_tweet_id = response.data['id']
-        print("Tweets posted successfully.")
+        logger.info("Tweets posted successfully.")
 
         if first_tweet_id:
             user = client.get_me()
@@ -209,7 +236,7 @@ def post_to_twitter(summary):
             return None
 
     except Exception as e:
-        print(f"Error posting to Twitter. It is likely that the ratelimit has been hit: {e}\n")
+        logger.error("Error posting to Twitter. It is likely that the ratelimit has been hit: %s\n", e)
 
 
 def yield_tweet(words):
@@ -242,9 +269,9 @@ def main():
             conn.commit()
         conn.close()
     except KeyboardInterrupt:
-        print("Program has been closed by the user")
+        logger.info("Program has been closed by the user")
     except sqlite3.IntegrityError as e:
-        print(f"Sqllite Not Null clause violated: {e}")
+        logger.error("Sqllite Not Null clause violated: %s", e)
 
 
 if __name__ == "__main__":
