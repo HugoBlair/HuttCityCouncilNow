@@ -1,9 +1,8 @@
 import io
-import math
 import os
 import re
 import sqlite3
-import textwrap
+import traceback
 from urllib.parse import urljoin
 
 import httpx
@@ -117,7 +116,8 @@ def summarize_with_gemini(committee_name, link):
     try:
         print("Summarizing with gemini...")
         client = genai.Client(api_key=GEMINI_API_KEY)
-        doc_io = io.BytesIO(httpx.get(link, follow_redirects=True, timeout=30).content)
+        doc_io = io.BytesIO(httpx.get(link, follow_redirects=True, timeout=120).content)
+        print(doc_io.getvalue())
 
         if doc_io.getbuffer().nbytes < 100:  # Arbitrary small size check
             print(f"Warning: File size is very small ({doc_io.getbuffer().nbytes} bytes). May not be a valid PDF.")
@@ -129,44 +129,50 @@ def summarize_with_gemini(committee_name, link):
         )
 
         prompt = f"""
-        Summarize this city council meeting into short bullet point paragraphs.
+        Summarize this city council meeting into short paragraphs.
         - Focus on key decisions, discussions, votes, and public comments.
         - Only include things that are vitally important and are interesting to an audience. 
         - Do not include boring information such as members present and public comment.
         - Focus on delivering information that is significant to the city.
         - Include important specifics and details
-
-        Begin your response with "The {committee_name} met to discuss " followed by the main subject of the meeting.
-        Add a small amount of hashtags into the tweet but only if relevant.
+        - Do not comment on opening or closing formalities
+        - Do not put anything in bold.
+        
+        Begin your response with "The {committee_name} met to discuss " followed by the main subject of the meeting. 
+        Follow this with a sentence about the main subject of the meeting.
+        Add a small amount of popular hashtags into the tweet but only if relevant.
                 
         Use natural formatting like this:
-        • Topic A "\n"
-        • Topic B "\n"
-        • Topic C "\n"
+        • Topic A
+        • Topic B
+        • Topic C
         
-        Ensure you add new line characters
+        Ensure you begin each point on a new line.
 
         """
 
         response = client.models.generate_content(model="gemini-2.0-flash", contents=[sample_doc, prompt])
         if response:
             print("Successfully generated summary")
-            print(response.text)
+
+            tweets = []
+            for tweet in yield_tweet(response.text.splitlines()):
+                tweets.append(tweet)
+
+            print(tweets)
+
             return response.text
         else:
             print("Error generating summary.")
 
     except httpx.HTTPStatusError as e:
         print(f"HTTP Error downloading PDF from {link}: {e.response.status_code} - {e.response.text}")
-        return f"Error generating summary: Failed to download PDF ({e.response.status_code})."
     except httpx.RequestError as e:
-        print(f"Request Error downloading PDF from {link}: {e}")
-        return "Error generating summary: Network error during download."
+        print(f"Request Error downloading PDF from {link}: {traceback.format_exc()}")
     except Exception as e:
         # Catch the specific Gemini API error if possible, otherwise generic
         print(f"Error summarizing with Gemini: {e}")
         # Check if the error string contains the specific message
-        return "Error generating summary."
 
 
 def post_to_twitter(summary):
@@ -180,29 +186,14 @@ def post_to_twitter(summary):
             X_API_ACCESS_TOKEN,
             X_API_ACCESS_TOKEN_SECRET
         )
-        tweet_length = len(summary)
-        tweets = []
-
-        if tweet_length > 272:
-            tweet_length_limit = tweet_length / 272
-
-            tweet_chunk_length = tweet_length / math.ceil(tweet_length_limit)
-
-            # chunk the tweet into individual pieces
-            tweet_chunks = textwrap.wrap(summary, math.ceil(tweet_chunk_length), break_long_words=False)
-
-            # iterate over the chunks
-            for x, chunk in zip(range(len(tweet_chunks)), tweet_chunks):
-                if x == 0:
-                    tweets.append(f' {chunk} (1/{len(tweet_chunks)})')
-                else:
-                    tweets.append(f'{chunk} ({x + 1}/{len(tweet_chunks)})')
 
         prev_tweet_id = None
         first_tweet_id = None  # storing the first tweet ID.
+        tweet_chunks = list(yield_tweet(summary.splitlines()))
+        tweet_chunks_len = len(tweet_chunks)
 
-        for tweet in tweets:
-            # response = client.create_tweet(text=tweet.replace("\\n", "\n"), in_reply_to_tweet_id=prev_tweet_id)
+        for x, tweet in enumerate(tweet_chunks):
+            tweet = tweet + f" ({x + 1}/{tweet_chunks_len})"
             response = client.create_tweet(text=tweet, in_reply_to_tweet_id=prev_tweet_id)
             prev_tweet_id = response.data['id']
             if first_tweet_id is None:
@@ -219,6 +210,19 @@ def post_to_twitter(summary):
 
     except Exception as e:
         print(f"Error posting to Twitter. It is likely that the ratelimit has been hit: {e}\n")
+
+
+def yield_tweet(words):
+    length, offset, tweet = 0, 0, []
+    tweet_length_limit = 272
+    for word in words:
+        if (len(word) + length - offset - 1) >= tweet_length_limit:
+            yield ' '.join(tweet)
+            tweet = []
+            offset = length
+        length += len(word) + 1
+        tweet.append(word)
+    yield ' '.join(tweet)
 
 
 def main():
