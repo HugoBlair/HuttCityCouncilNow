@@ -52,12 +52,15 @@ conn, cursor = get_db_connection()
 
 def scrape_links():
     """Scrape agenda PDFs from council website."""
+
     try:
+
         print("Scraping links from council website...")
         response = requests.get(COUNCIL_URL)
 
         soup = BeautifulSoup(response.text, "html.parser")
 
+        # Change limit to adjust how far the program should look back through the agenda files
         found_links = soup.find_all("a", href=re.compile(r"\.PDF$"), limit=1)
         new_links = []
 
@@ -126,26 +129,29 @@ def summarize_with_gemini(committee_name, link):
         )
 
         prompt = f"""
-        Summarize this city council meeting in short paragraphs.
+        Summarize this city council meeting into short bullet point paragraphs.
         - Focus on key decisions, discussions, votes, and public comments.
         - Only include things that are vitally important and are interesting to an audience. 
         - Do not include boring information such as members present and public comment.
         - Focus on delivering information that is significant to the city.
         - Include important specifics and details
 
-        Begin your response with "The {committee_name} met to discuss:" followed by the main subject of the meeting.
+        Begin your response with "The {committee_name} met to discuss " followed by the main subject of the meeting.
         Add a small amount of hashtags into the tweet but only if relevant.
                 
         Use natural formatting like this:
         • Topic A "\n"
         • Topic B "\n"
         • Topic C "\n"
+        
+        Ensure you add new line characters
 
         """
 
         response = client.models.generate_content(model="gemini-2.0-flash", contents=[sample_doc, prompt])
         if response:
             print("Successfully generated summary")
+            print(response.text)
             return response.text
         else:
             print("Error generating summary.")
@@ -165,6 +171,7 @@ def summarize_with_gemini(committee_name, link):
 
 def post_to_twitter(summary):
     """Post summary to Twitter as a thread."""
+
     try:
         client = tweepy.Client(
             X_API_BEARER_TOKEN,
@@ -211,7 +218,7 @@ def post_to_twitter(summary):
             return None
 
     except Exception as e:
-        print(f"Error posting to Twitter: {e}")
+        print(f"Error posting to Twitter. It is likely that the ratelimit has been hit: {e}\n")
 
 
 def main():
@@ -221,8 +228,10 @@ def main():
         data_to_insert = []
         for committee_name, link in found_links:
             summary = summarize_with_gemini(committee_name, link)
-            x_link = post_to_twitter(summary)
-            data_to_insert.append((committee_name, link, x_link, summary))
+            x_link = None
+            # x_link = post_to_twitter(summary)
+            if committee_name and link and x_link and summary:
+                data_to_insert.append((committee_name, link, x_link, summary))
 
         if data_to_insert:
             cursor.executemany("INSERT INTO council_meetings VALUES (DATETIME('now'),?, ?, ?, ?)", data_to_insert)
@@ -230,6 +239,8 @@ def main():
         conn.close()
     except KeyboardInterrupt:
         print("Program has been closed by the user")
+    except sqlite3.IntegrityError as e:
+        print(f"Sqllite Not Null clause violated: {e}")
 
 
 if __name__ == "__main__":
