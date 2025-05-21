@@ -83,7 +83,7 @@ def scrape_links():
         soup = BeautifulSoup(response.text, "html.parser")
 
         # Change limit to adjust how far the program should look back through the agenda files
-        found_links = soup.find_all("a", href=re.compile(r"\.PDF$"), limit=6)
+        found_links = soup.find_all("a", href=re.compile(r"\.PDF$"), limit=1)
         new_links = []
 
         for link in found_links:
@@ -179,16 +179,6 @@ def summarize_with_gemini(committee_name, link):
         if response:
             logger.info("Successfully generated summary")
 
-            """
-            Print out tweets (for testing)
-            
-            tweets = []
-            for tweet in yield_tweet(response.text.splitlines()):
-                tweets.append(tweet)
-
-            logger.debug(tweets)
-            """
-
             return response.text
         else:
             logger.error("Error generating summary.")
@@ -216,12 +206,15 @@ def post_to_twitter(summary):
 
         prev_tweet_id = None
         first_tweet_id = None  # storing the first tweet ID.
-        tweet_chunks = list(yield_tweet(summary.splitlines()))
+        tweet_chunks = generate_tweet(summary.splitlines())
         tweet_chunks_len = len(tweet_chunks)
+        logger.info("Chunked tweets:")
+        logger.info(tweet_chunks)
 
         for x, tweet in enumerate(tweet_chunks):
             tweet = tweet + f" ({x + 1}/{tweet_chunks_len})"
             response = client.create_tweet(text=tweet, in_reply_to_tweet_id=prev_tweet_id)
+            logger.info(f"Posted tweet to Twitter: {tweet}")
             prev_tweet_id = response.data['id']
             if first_tweet_id is None:
                 first_tweet_id = response.data['id']
@@ -236,20 +229,51 @@ def post_to_twitter(summary):
             return None
 
     except Exception as e:
-        logger.error("Error posting to Twitter. It is likely that the ratelimit has been hit: %s\n", e)
+        logger.error("Error posting to Twitter. It is likely that the ratelimit has been hit: %s\n",
+                     traceback.format_exc())
 
 
-def yield_tweet(words):
-    length, offset, tweet = 0, 0, []
-    tweet_length_limit = 272
-    for word in words:
-        if (len(word) + length - offset - 1) >= tweet_length_limit:
-            yield ' '.join(tweet)
-            tweet = []
-            offset = length
-        length += len(word) + 1
-        tweet.append(word)
-    yield ' '.join(tweet)
+def generate_tweet(lines):
+    tweet_length_limit = 270
+    tweets = []
+    tweet = ""
+
+    for line in lines:
+        len_line = len(line)
+
+        if len_line >= tweet_length_limit:
+            tweets.append(tweet)
+            tweet = ""
+
+            new_line_1 = ""
+            new_line_2 = ""
+
+            length = 0
+            for word in line.split():
+                length += (len(word) + 1)
+
+                if length < tweet_length_limit:
+                    new_line_1 += word + " "
+                if length >= tweet_length_limit:
+                    new_line_2 += word + " "
+
+            tweets.append(new_line_1)
+            tweets.append(new_line_2)
+        else:
+            len_tweet = len(tweet)
+
+            if len_tweet >= tweet_length_limit:
+                tweets.append(tweet)
+                tweet = line
+            elif len_tweet + len_line >= tweet_length_limit:
+                tweets.append(tweet)
+                tweet = line
+            else:
+                tweet += line + " "
+
+    if tweet != "":
+        tweets.append(tweet)
+    return tweets
 
 
 def main():
